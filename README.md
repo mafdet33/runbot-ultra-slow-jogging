@@ -1,0 +1,1 @@
+Starter project placeholder. (Full files previously generated.)

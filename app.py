@@ -1,0 +1,449 @@
+# ================================================================
+#   RunBot 超慢跑助手（主視覺 + 白卡片 + 完整小測驗）
+#   Final Version - Fully Working
+# ================================================================
+
+import os
+import json
+import random
+import sqlite3
+from datetime import datetime, timedelta
+
+from flask import Flask, request, abort, send_from_directory, jsonify
+from dotenv import load_dotenv
+
+# LINE v2 SDK
+from linebot import LineBotApi, WebhookHandler
+from linebot.exceptions import InvalidSignatureError
+from linebot.models import (
+    MessageEvent, TextMessage, TextSendMessage,
+    PostbackEvent,
+    FlexSendMessage, ImageSendMessage
+)
+
+# ---------------------------------------------------------------
+#                 Load environment variables
+# ---------------------------------------------------------------
+load_dotenv()
+LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+
+# 你的固定 ngrok domain
+NGROK = "https://unstarved-consentaneous-estella.ngrok-free.dev"
+
+if not LINE_CHANNEL_SECRET or not LINE_CHANNEL_ACCESS_TOKEN:
+    print("❌ ERROR: Missing LINE keys (.env 未設定完整)")
+
+app = Flask(__name__)
+line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(LINE_CHANNEL_SECRET)
+
+DB_PATH = "quiz.db"
+EDU_PATH = "content/education.json"
+QUIZ_PATH = "content/quiz.json"
+
+
+# ================================================================
+#                     Health Check & Static
+# ================================================================
+@app.route("/", methods=["GET"])
+def health():
+    return jsonify({"ok": True})
+
+
+@app.route("/content/<path:filename>")
+def serve_content(filename):
+    return send_from_directory("content", filename)
+
+
+# ================================================================
+#                        LINE Webhook
+# ================================================================
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    signature = request.headers.get("X-Line-Signature", "")
+    body = request.get_data(as_text=True)
+
+    try:
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        abort(400)
+
+    return "OK"
+
+
+# ================================================================
+#                           Database
+# ================================================================
+def init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS quiz_state(
+            user_id TEXT PRIMARY KEY,
+            q_list TEXT,
+            idx INTEGER DEFAULT 0,
+            score INTEGER DEFAULT 0,
+            started_at TEXT
+        )
+        """)
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS quiz_result(
+            user_id TEXT,
+            score INTEGER,
+            total INTEGER,
+            percent INTEGER,
+            finished_at TEXT
+        )
+        """)
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS run_log(
+            user_id TEXT,
+            run_date TEXT
+        )
+        """)
+
+        conn.commit()
+
+
+# ================================================================
+#                          Utilities
+# ================================================================
+def load_json(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def get_random_article(key):
+    data = load_json(EDU_PATH)
+    arr = data.get(key, [])
+    if not arr:
+        return {"title": "尚無資料", "content": "請稍後再試～"}
+    return random.choice(arr)
+
+
+# ================================================================
+#                    Main Menu (image + card)
+# ================================================================
+def main_visual():
+    url = f"{NGROK}/content/images/run.png"
+    return ImageSendMessage(url, url)
+
+
+def menu_flex():
+    bubble = {
+        "type": "bubble",
+        "size": "mega",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "md",
+            "contents": [
+                {"type": "text", "text": "RunBot 超慢跑助手 🏃‍♀️", "weight": "bold", "size": "xl"},
+                {
+                    "type": "text",
+                    "text": (
+                        "嗨～我是你的 RunBot 超慢跑助手。\n"
+                        "我可以陪你認識超慢跑、飲食建議，也能和你一起做小測驗！\n\n"
+                        "任何時候輸入「開始」都能回到這裡 😊"
+                    ),
+                    "wrap": True,
+                    "margin": "md"
+                }
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "sm",
+            "contents": [
+                {"type": "button", "style": "secondary", "action": {"type": "postback", "label": "關於超慢跑", "data": "menu:about"}},
+                {"type": "button", "style": "secondary", "action": {"type": "postback", "label": "飲食建議", "data": "menu:diet"}},
+                {"type": "button", "style": "secondary", "action": {"type": "postback", "label": "運動建議", "data": "menu:exercise"}},
+                {"type": "button", "style": "secondary", "action": {"type": "postback", "label": "小測驗", "data": "quiz:start"}},
+                {"type": "button", "style": "secondary", "action": {"type": "message", "label": "我今天有運動", "text": "我今天有運動"}},
+                {"type": "button", "style": "secondary", "action": {"type": "message", "label": "本週統計", "text": "本週統計"}},
+            ]
+        }
+    }
+    return FlexSendMessage("主選單", bubble)
+
+
+# ================================================================
+#                        Quiz Logic
+# ================================================================
+def start_quiz(uid):
+    quiz_all = load_json(QUIZ_PATH)
+    selected = random.sample(quiz_all, 5) if len(quiz_all) >= 5 else quiz_all
+
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute("""
+        REPLACE INTO quiz_state(user_id, q_list, idx, score, started_at)
+        VALUES (?, ?, ?, ?, ?)
+        """, (uid, json.dumps(selected, ensure_ascii=False), 0, 0, datetime.utcnow().isoformat()))
+        conn.commit()
+
+
+def get_quiz_state(uid):
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute("SELECT q_list, idx, score FROM quiz_state WHERE user_id=?", (uid,))
+        row = c.fetchone()
+
+    return (json.loads(row[0]), row[1], row[2]) if row else None
+
+
+def update_quiz_state(uid, idx, score):
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute("UPDATE quiz_state SET idx=?, score=? WHERE user_id=?", (idx, score, uid))
+        conn.commit()
+
+
+def send_quiz_question_reply(event, qdata, idx):
+    """reply_message 用（第一題用）"""
+    flex = build_quiz_bubble(qdata, idx)
+    line_bot_api.reply_message(event.reply_token, flex)
+
+
+def send_quiz_question_push(uid, qdata, idx):
+    """push_message 用（往下一題）"""
+    flex = build_quiz_bubble(qdata, idx)
+    line_bot_api.push_message(uid, flex)
+
+
+def build_quiz_bubble(qdata, idx):
+    q = qdata[idx]
+    bubble = {
+        "type": "bubble",
+        "size": "mega",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "md",
+            "contents": [
+                {"type": "text", "text": f"題目 {idx+1}/{len(qdata)}", "weight": "bold", "size": "xl"},
+                {"type": "text", "text": q["question"], "wrap": True, "margin": "md"}
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "sm",
+            "contents": []
+        }
+    }
+
+    for i, opt in enumerate(q["options"]):
+        bubble["footer"]["contents"].append({
+            "type": "button",
+            "style": "secondary",
+            "action": {"type": "postback", "label": opt, "data": f"quiz:ans:{idx}:{i}"}
+        })
+
+    return FlexSendMessage("小測驗", bubble)
+
+
+def feedback(ok):
+    if ok:
+        return random.choice([
+            "✨ 太棒了！繼續保持～",
+            "💪 答對了！你真的很棒！",
+            "🎉 完全正確！"
+        ])
+    return random.choice([
+        "🌱 沒關係，我們一起慢慢來～",
+        "🤔 小小失誤也沒關係，下題再挑戰！",
+        "💡 再看看下一題吧！"
+    ])
+
+
+# ================================================================
+#                  Postback Handler
+# ================================================================
+@handler.add(PostbackEvent)
+def handle_postback(event):
+    data = event.postback.data
+    uid = event.source.user_id
+
+    # 主選單
+    if data.startswith("menu:"):
+        key = data.split(":", 1)[1]
+        fake = MessageEvent(
+        reply_token=event.reply_token,
+        source=event.source,
+        message=TextMessage(text=key)
+    )
+        handle_text(fake)
+        return
+
+    # 小測驗開始
+    if data == "quiz:start":
+        start_quiz(uid)
+        qdata, idx, score = get_quiz_state(uid)
+        send_quiz_question_reply(event, qdata, idx)
+        return
+
+    # 小測驗回答
+    if data.startswith("quiz:ans:"):
+        _, _, idx_s, opt_s = data.split(":")
+        idx = int(idx_s)
+        chosen = int(opt_s)
+
+        state = get_quiz_state(uid)
+        if not state:
+            return
+
+        qdata, _, score = state
+        correct_idx = qdata[idx]["answer"]
+        ok = (chosen == correct_idx)
+
+        if ok:
+            score += 1
+
+        # 1️⃣ 回饋（reply）
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=feedback(ok)))
+
+        next_idx = idx + 1
+        total = len(qdata)
+
+        # 2️⃣ 如果還有下一題 → push 題目
+        if next_idx < total:
+            update_quiz_state(uid, next_idx, score)
+            send_quiz_question_push(uid, qdata, next_idx)
+            return
+
+        # 3️⃣ 測驗完成 → push 成績＋主選單
+        percent = int(score * 100 / total)
+        summary = (
+            f"🎉 小測驗完成！\n\n"
+            f"得分：{score}/{total}\n"
+            f"正確率：{percent}%\n\n"
+            f"你已經掌握不少超慢跑觀念了，很棒！"
+        )
+
+        # 記錄成績
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            c.execute("""
+            INSERT INTO quiz_result(user_id, score, total, percent, finished_at)
+            VALUES (?, ?, ?, ?, ?)
+            """, (uid, score, total, percent, datetime.utcnow().isoformat()))
+            conn.commit()
+
+        line_bot_api.push_message(uid, TextSendMessage(summary))
+        line_bot_api.push_message(uid, main_visual())
+        line_bot_api.push_message(uid, menu_flex())
+        return
+
+
+# ================================================================
+#                     Exercise Log
+# ================================================================
+def record_today(uid):
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute("INSERT INTO run_log(user_id, run_date) VALUES (?, ?)", (uid, today))
+        conn.commit()
+
+
+def get_week_stat(uid):
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    start_day = seven_days_ago.strftime("%Y-%m-%d")
+
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute("SELECT run_date FROM run_log WHERE user_id=? AND run_date>=?",
+                  (uid, start_day))
+        rows = c.fetchall()
+
+    return len(set(r[0] for r in rows))
+
+
+# ================================================================
+#                     Article Card
+# ================================================================
+def make_article(title, content):
+    bubble = {
+        "type": "bubble",
+        "size": "mega",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {"type": "text", "text": title, "weight": "bold", "size": "lg"},
+                {"type": "text", "text": content, "wrap": True, "margin": "md"}
+            ]
+        }
+    }
+    return FlexSendMessage(title, bubble)
+
+
+# ================================================================
+#                     Text Message Handler
+# ================================================================
+@handler.add(MessageEvent, message=TextMessage)
+def handle_text(event):
+    text = event.message.text.strip()
+    uid = event.source.user_id
+
+    # 主選單
+    if text in ["開始", "主選單", "menu"]:
+        line_bot_api.reply_message(event.reply_token, main_visual())
+        line_bot_api.push_message(uid, menu_flex())
+        return
+
+    # 衛教內容
+    if text in ["關於超慢跑", "about"]:
+        a = get_random_article("about")
+        line_bot_api.reply_message(event.reply_token, make_article(a["title"], a["content"]))
+        return
+
+    if text in ["飲食建議", "diet"]:
+        a = get_random_article("diet")
+        line_bot_api.reply_message(event.reply_token, make_article(a["title"], a["content"]))
+        return
+
+    if text in ["運動建議", "exercise"]:
+        a = get_random_article("exercise")
+        line_bot_api.reply_message(event.reply_token, make_article(a["title"], a["content"]))
+        return
+
+    # 運動紀錄
+    if text == "我今天有運動":
+        record_today(uid)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage("太棒了！我已記錄今天的運動 🌟"))
+        return
+
+    # 本週統計
+    if text == "本週統計":
+        days = get_week_stat(uid)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(f"你最近 7 天有運動 {days} 天！持續加油 💪")
+        )
+        return
+
+    # fallback
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(
+            "我懂的指令有：開始、小測驗、關於超慢跑、飲食建議、運動建議、我今天有運動、本週統計。\n\n先帶你回主選單～"
+        )
+    )
+    line_bot_api.push_message(uid, main_visual())
+    line_bot_api.push_message(uid, menu_flex())
+
+
+# ================================================================
+#                          Main
+# ================================================================
+if __name__ == "__main__":
+    init_db()
+    port = int(os.getenv("PORT", 5001))
+    app.run(host="0.0.0.0", port=port)
