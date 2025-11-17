@@ -17,11 +17,11 @@ def clean(text):
 
 
 # -----------------------
-# Selenium 抓單篇全文
+# Selenium 
 # -----------------------
 
 def fetch_article(url):
-    print(f"🥗 抓取文章：{url}")
+    print(f" 抓取文章：{url}")
 
     options = webdriver.ChromeOptions()
     options.add_argument("--headless")
@@ -35,7 +35,7 @@ def fetch_article(url):
     driver.get(url)
     time.sleep(2)
 
-    # 嘗試抓文章內容
+    # 抓內容
     candidates = [
         "#page-top",
         ".innerPage",
@@ -83,7 +83,7 @@ def fetch_article(url):
     return clean(title), clean(text)
 
 # -----------------------
-# 基本 NLP 分群
+#  NLP 分群
 # -----------------------
 def classify(text):
     text = text.lower()
@@ -101,7 +101,7 @@ def classify(text):
 
 
 # -----------------------
-# 抓某分類最新 10 篇文章 pid
+# 抓每分類最新 10 篇文章 pid
 # -----------------------
 def fetch_latest_pids(list_url, limit=10):
     print(f"\n📄 抓取列表頁：{list_url}")
@@ -116,7 +116,7 @@ def fetch_latest_pids(list_url, limit=10):
     driver.get(list_url)
     time.sleep(1)
 
-    # 🔍 抓所有 Detail 連結
+    #  抓所有 Detail 連結
     elems = driver.find_elements(By.CSS_SELECTOR, "a")
     urls = []
     for e in elems:
@@ -153,7 +153,7 @@ def run():
 
     for cat, list_url in CATEGORY_LIST.items():
         print(f"\n=========================")
-        print(f"📚 分類：{cat}")
+        print(f" 分類：{cat}")
         print(f"=========================")
 
         urls = fetch_latest_pids(list_url, limit=10)
@@ -175,7 +175,7 @@ def run():
     with open("content/mohw_grouped.json", "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
 
-    print("\n🎉 已產生 content/mohw_grouped.json")
+    print("\n 已產生 content/mohw_grouped.json")
 
 
 if __name__ == "__main__":
