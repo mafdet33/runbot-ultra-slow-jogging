@@ -32,7 +32,7 @@ LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 NGROK = "https://unstarved-consentaneous-estella.ngrok-free.dev"
 
 if not LINE_CHANNEL_SECRET or not LINE_CHANNEL_ACCESS_TOKEN:
-    print(" ERROR: Missing LINE keys (.env 未設定完整)")
+    print("❌ ERROR: Missing LINE keys (.env 未設定完整)")
 
 app = Flask(__name__)
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
@@ -122,88 +122,13 @@ def load_mohw_group():
         return {}
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
-    
 
-# -----------------------------------------------------------
-# 通用文章瀏覽器（適用：about / diet / exercise）
-# -----------------------------------------------------------
-def send_edu_article(uid, key, idx):
-    data = load_json(EDU_PATH)
-    arr = data.get(key, [])
-
-    if not arr:
-        line_bot_api.push_message(uid, TextSendMessage("此分類目前沒有內容"))
-        return
-
-    item = arr[idx]
-    title = item["title"]
-    content = item["content"][:300] + "..." if len(item["content"]) > 300 else item["content"]
-
-    bubble = {
-        "type": "bubble",
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "contents": [
-                {"type": "text", "text": title, "weight": "bold", "wrap": True},
-                {"type": "text", "text": content, "wrap": True, "margin": "md"}
-            ]
-        },
-        "footer": {
-            "type": "box",
-            "layout": "horizontal",
-            "contents": [
-                {
-                    "type": "button",
-                    "style": "secondary",
-                    "action": {"type": "postback",
-                               "label": "上一篇",
-                               "data": f"edu_prev:{key}:{idx}"}
-                },
-                {
-                    "type": "button",
-                    "style": "secondary",
-                    "action": {"type": "postback",
-                               "label": "下一篇",
-                               "data": f"edu_next:{key}:{idx}"}
-                }
-            ]
-        }
-    }
-
-    line_bot_api.push_message(uid, FlexSendMessage(title, bubble))
-    line_bot_api.push_message(uid, return_home_button())
-
-
-# 回主選單按鈕
-def return_home_button():
-    bubble = {
-        "type": "bubble",
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "contents": [
-                {
-                    "type": "button",
-                    "style": "primary",
-                    "action": {"type": "message", "label": "回主選單", "text": "開始"}
-                }
-            ]
-        }
-    }
-    return FlexSendMessage("回主選單", bubble)
-
-
-# -----------------------------------------------------------
-
-# -----------------------------------------------------------
-# 國健署文章顯示（已修正 reply → push）
-# -----------------------------------------------------------
 def send_mohw_article(uid, articles, idx):
     a = articles[idx]
+
     title = a["title"]
     content = a["content"][:300] + "..." if len(a["content"]) > 300 else a["content"]
-    cat = a.get("category", "未分類")
+    cat = a.get("category", "無分類")
 
     bubble = {
         "type": "bubble",
@@ -212,7 +137,7 @@ def send_mohw_article(uid, articles, idx):
             "layout": "vertical",
             "contents": [
                 {"type": "text", "text": title, "weight": "bold", "wrap": True},
-                {"type": "text", "text": content, "wrap": True, "margin": "md"}
+                {"type": "text", "text": content, "wrap": True, "margin": "md"},
             ]
         },
         "footer": {
@@ -222,21 +147,27 @@ def send_mohw_article(uid, articles, idx):
                 {
                     "type": "button",
                     "style": "secondary",
-                    "action": {"type": "postback", "label": "上一篇", "data": f"mohw_prev:{cat}:{idx}"}
+                    "action": {
+                        "type": "postback",
+                        "label": "上一篇",
+                        "data": f"mohw_prev:{cat}:{idx}"
+                    }
                 },
                 {
                     "type": "button",
                     "style": "secondary",
-                    "action": {"type": "postback", "label": "下一篇", "data": f"mohw_next:{cat}:{idx}"}
+                    "action": {
+                        "type": "postback",
+                        "label": "下一篇",
+                        "data": f"mohw_next:{cat}:{idx}"
+                    }
                 }
             ]
         }
     }
 
-    line_bot_api.push_message(uid, FlexSendMessage(title, bubble))
-    line_bot_api.push_message(uid, return_home_button())
-
-                   
+    line_bot_api.reply_message(event.reply_token, FlexSendMessage(title, bubble))
+    return
 
 
 
@@ -246,25 +177,6 @@ def get_random_article(key):
     if not arr:
         return {"title": "尚無資料", "content": "請稍後再試～"}
     return random.choice(arr)
-
-def return_home_button():
-    bubble = {
-        "type": "bubble",
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "contents": [
-                {
-                    "type": "button",
-                    "style": "primary",
-                    "action": {"type": "message", "label": "回主選單", "text": "開始"}
-                }
-            ]
-        }
-    }
-    return FlexSendMessage("回主選單", bubble)
-
-
 
 def mohw_category_menu():
     bubble = {
@@ -488,19 +400,19 @@ def handle_postback(event):
         if ok:
             score += 1
 
-        # 1回饋（reply）
+        # 1️⃣ 回饋（reply）
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=feedback(ok)))
 
         next_idx = idx + 1
         total = len(qdata)
 
-        # 2如果還有下一題 → push 題目
+        # 2️⃣ 如果還有下一題 → push 題目
         if next_idx < total:
             update_quiz_state(uid, next_idx, score)
             send_quiz_question_push(uid, qdata, next_idx)
             return
 
-        # 3 測驗完成 → push 成績＋主選單
+        # 3️⃣ 測驗完成 → push 成績＋主選單
         percent = int(score * 100 / total)
         summary = (
             f"🎉 小測驗完成！\n\n"
@@ -523,43 +435,6 @@ def handle_postback(event):
         line_bot_api.push_message(uid, menu_flex())
         return
     
-    # -----------------------------------------------------------
-    # 衛教文章（about / diet / exercise）上一篇
-    # -----------------------------------------------------------
-    if data.startswith("edu_prev:"):
-        _, key, idx_s = data.split(":")
-        idx = int(idx_s) - 1
-
-        arr = load_json(EDU_PATH).get(key, [])
-        if not arr:
-            return
-
-        if idx < 0:
-            idx = len(arr) - 1
-
-        send_edu_article(uid, key, idx)
-        return
-
-
-    # -----------------------------------------------------------
-    # 衛教文章 下一篇
-    # -----------------------------------------------------------
-    if data.startswith("edu_next:"):
-        _, key, idx_s = data.split(":")
-        idx = int(idx_s) + 1
-
-        arr = load_json(EDU_PATH).get(key, [])
-        if not arr:
-            return
-
-        if idx >= len(arr):
-            idx = 0
-
-        send_edu_article(uid, key, idx)
-        return
-
-
-
     # ------------------------------------------------------------
     # 國健署：點分類後顯示第 1 篇
     # ------------------------------------------------------------
@@ -572,7 +447,7 @@ def handle_postback(event):
             return
 
         idx = 0
-        send_mohw_article(uid, articles, 0)
+        send_mohw_article(uid, articles, idx)
         return
 
     # ------------------------------------------------------------
@@ -670,15 +545,18 @@ def handle_text(event):
 
     # 衛教內容
     if text in ["關於超慢跑", "about"]:
-        send_edu_article(uid, "about", 0)
+        a = get_random_article("about")
+        line_bot_api.reply_message(event.reply_token, make_article(a["title"], a["content"]))
         return
 
     if text in ["飲食建議", "diet"]:
-        send_edu_article(uid, "diet", 0)
+        a = get_random_article("diet")
+        line_bot_api.reply_message(event.reply_token, make_article(a["title"], a["content"]))
         return
 
     if text in ["運動建議", "exercise"]:
-        send_edu_article(uid, "exercise", 0)
+        a = get_random_article("exercise")
+        line_bot_api.reply_message(event.reply_token, make_article(a["title"], a["content"]))
         return
     
     # 國健署文章
